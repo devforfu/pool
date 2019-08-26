@@ -22,15 +22,7 @@ func NewPool(n int) *Pool {
 }
 
 func (p *Pool) Submit(jobs []Job, function ExecFunc) {
-	workers := make([]*Worker, 0)
-
-	for i := 0; i < p.NumWorkers; i++ {
-		worker := Worker{
-			ID:i, Function:function,
-			Done:p.Done, Stop:p.Stop, Pool:p}
-		log.Printf("adding worker with ID=%d", worker.ID)
-		workers = append(workers, &worker)
-	}
+	workers := p.prepareWorkers(function)
 
 	go func(){
 		for _, job := range jobs {
@@ -39,10 +31,24 @@ func (p *Pool) Submit(jobs []Job, function ExecFunc) {
 		close(p.Jobs)
 	}()
 
-	for _, worker := range workers {
-		log.Printf("submitting worker with ID=%d", worker.ID)
-		go worker.Submit(p.Jobs, p.Results)
-	}
+	p.spawnWorkers(workers)
+}
+
+func (p *Pool) Chain(prev <-chan Result, function ExecFunc) {
+	workers := p.prepareWorkers(function)
+
+	go func() {
+		for result := range prev {
+			if err := result.Error; err != nil {
+				log.Printf("previous result has error: %s", err.Error())
+			} else {
+				p.Jobs <- Job{Payload:result.Payload}
+			}
+		}
+		close(p.Jobs)
+	}()
+
+	p.spawnWorkers(workers)
 }
 
 func (p *Pool) Wait() []Result {
@@ -63,5 +69,24 @@ func (p *Pool) Wait() []Result {
 				close(p.Results)
 			}
 		}
+	}
+}
+
+func (p *Pool) prepareWorkers(f ExecFunc) []*Worker {
+	workers := make([]*Worker, 0)
+	for i := 0; i < p.NumWorkers; i++ {
+		worker := Worker{
+			ID:i, Function:f,
+			Done:p.Done, Stop:p.Stop, Pool:p}
+		log.Printf("adding worker with ID=%d", worker.ID)
+		workers = append(workers, &worker)
+	}
+	return workers
+}
+
+func (p *Pool) spawnWorkers(workers []*Worker) {
+	for _, worker := range workers {
+		log.Printf("submitting worker with ID=%d", worker.ID)
+		go worker.Submit(p.Jobs, p.Results)
 	}
 }
